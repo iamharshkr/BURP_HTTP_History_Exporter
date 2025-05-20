@@ -1,6 +1,7 @@
 from burp import IBurpExtender, ITab, IHttpListener
 from javax.swing import JPanel, JButton, JCheckBox, JScrollPane, BoxLayout, JLabel, BorderFactory, JFileChooser, JOptionPane
-from java.awt import BorderLayout, Dimension, Font, Color
+from javax.swing import JSeparator, SwingConstants
+from java.awt import BorderLayout, Dimension, Font, Color, FlowLayout, GridLayout
 import csv
 from java.net import URL
 from java.io import File
@@ -26,13 +27,36 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener):
         title_panel.add(title_label)
         self.panel.add(title_panel, BorderLayout.NORTH)
         
+        # Main content panel with split layout
+        content_panel = JPanel(BorderLayout())
+        
         # Domain Selection Panel
         self.domain_panel = JPanel()
         self.domain_panel.setLayout(BoxLayout(self.domain_panel, BoxLayout.Y_AXIS))
         self.domain_scroll = JScrollPane(self.domain_panel)
         self.domain_scroll.setPreferredSize(Dimension(400, 300))
         self.domain_scroll.setBorder(BorderFactory.createTitledBorder("Select Domains"))
-        self.panel.add(self.domain_scroll, BorderLayout.CENTER)
+        content_panel.add(self.domain_scroll, BorderLayout.CENTER)
+        
+        # Export Options Panel
+        export_options_panel = JPanel()
+        export_options_panel.setLayout(BoxLayout(export_options_panel, BoxLayout.Y_AXIS))
+        export_options_panel.setBorder(BorderFactory.createTitledBorder("Export Options"))
+        
+        # Create checkboxes for export options
+        self.export_params_checkbox = JCheckBox("Export Parameters", True)  # Checked by default
+        self.export_request_checkbox = JCheckBox("Export Requests", False)
+        self.export_response_checkbox = JCheckBox("Export Responses", False)
+        
+        export_options_panel.add(self.export_params_checkbox)
+        export_options_panel.add(self.export_request_checkbox)
+        export_options_panel.add(self.export_response_checkbox)
+        
+        # Add some padding
+        export_options_panel.add(JPanel())  # Empty panel for spacing
+        
+        content_panel.add(export_options_panel, BorderLayout.SOUTH)
+        self.panel.add(content_panel, BorderLayout.CENTER)
         
         # Button Panel
         button_panel = JPanel()
@@ -95,6 +119,16 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener):
         print("[*] Starting export process...")
 
         try:
+            # Get export options
+            export_params = self.export_params_checkbox.isSelected()
+            export_request = self.export_request_checkbox.isSelected()
+            export_response = self.export_response_checkbox.isSelected()
+            
+            if not any([export_params, export_request, export_response]):
+                JOptionPane.showMessageDialog(self.panel, "Please select at least one export option!", "Error", JOptionPane.ERROR_MESSAGE)
+                print("[!] No export options selected.")
+                return
+
             # Check if domains are selected
             selected_domains = [cb.getText() for cb in self.checkboxes if cb.isSelected()]
             if not selected_domains:
@@ -103,6 +137,8 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener):
                 return
 
             print("[*] Selected domains: {}".format(selected_domains))
+            print("[*] Export options - Parameters: {}, Request: {}, Response: {}".format(
+                export_params, export_request, export_response))
 
             # Open file save dialog
             file_chooser = JFileChooser()
@@ -129,10 +165,19 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener):
             # Set to keep track of processed URLs
             processed_urls = set()
 
+            # Prepare CSV headers based on selected options
+            headers = ["S.No.", "API"]
+            if export_params:
+                headers.append("Parameters")
+            if export_request:
+                headers.append("Request")
+            if export_response:
+                headers.append("Response")
+
             # Write to CSV
             with open(file_path, "w") as csvfile:
                 writer = csv.writer(csvfile)
-                writer.writerow(["S.No.", "API", "Parameters"])  # Headers
+                writer.writerow(headers)  # Dynamic headers
 
                 count = 0
                 for entry in http_traffic:
@@ -180,21 +225,38 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener):
                                 formatted_body = request_body  # Keep raw body if not JSON
 
                         # Build "API" column with request and body (if available)
-                        if formatted_body:
-                            api_info = "{} {}\n\n{}".format(method, url, formatted_body)
-                        else:
-                            api_info = "{} {}".format(method, url)
+                        api_info = "{} {}".format(method, url)
 
-                        # Format "Parameters" column (one key per line)
-                        parameters = "\n".join(query_keys + body_keys) if query_keys or body_keys else ""
+                        # Prepare row data
+                        row_data = [count + 1, api_info]  # S.No. and API are always included
+
+                        # Add Parameters column if selected
+                        if export_params:
+                            parameters = "\n".join(query_keys + body_keys) if query_keys or body_keys else ""
+                            row_data.append(parameters)
+
+                        # Add Request column if selected
+                        if export_request:
+                            full_request = self._helpers.bytesToString(request_bytes)
+                            row_data.append(full_request)
+
+                        # Add Response column if selected
+                        if export_response:
+                            response_bytes = entry.getResponse()
+                            if response_bytes:
+                                full_response = self._helpers.bytesToString(response_bytes)
+                                row_data.append(full_response)
+                            else:
+                                row_data.append("")  # Empty response
 
                         count += 1
-                        writer.writerow([count, api_info, parameters])
+                        writer.writerow(row_data)
                     except Exception as e:
                         print("[!] Error processing entry: {}".format(e))
 
             print("[*] HTTP history exported to {}".format(file_path))
-            JOptionPane.showMessageDialog(self.panel, "Export completed successfully!", "Success", JOptionPane.INFORMATION_MESSAGE)
+            JOptionPane.showMessageDialog(self.panel, "Export completed successfully! {} entries exported.".format(count), 
+                                         "Success", JOptionPane.INFORMATION_MESSAGE)
         except Exception as e:
             print("[!] Error during export: {}".format(e))
             JOptionPane.showMessageDialog(self.panel, "Error during export: {}".format(e), "Error", JOptionPane.ERROR_MESSAGE)
